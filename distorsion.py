@@ -1,8 +1,9 @@
-import inkex
 import os
 from math import sqrt
+import inkex
 import simplepath
-
+import simpletransform
+import simplestyle
 
 
 class DistorsionExtension(inkex.Effect):
@@ -50,7 +51,7 @@ class DistorsionExtension(inkex.Effect):
                 d = node.get('d')
                 path = simplepath.parsePath(d)
                 nodes += path
-        nodes_filtered = [x for x in nodes if x[0]!='Z']
+        nodes_filtered = [x for x in nodes if x[0] != 'Z']
         x_coordinates = [x[-1][-2] for x in nodes_filtered]
         y_coordinates = [y[-1][-1] for y in nodes_filtered]
         self.width = max(x_coordinates) - min(x_coordinates)
@@ -78,6 +79,88 @@ class DistorsionExtension(inkex.Effect):
                             distorted.append(
                                 ['L', self.distort_coordinates(x, y)])
                 node.set('d', simplepath.formatPath(distorted))
+
+    def _get_dimension(self, s="1024"):
+        "Converts an SVG length to pixels"
+        if s == "":
+            return 0
+        try:
+            last = int(s[-1])
+        except (ValueError, IndexError):
+            last = None
+        if type(last) == int:
+            return float(s)
+        elif s[-1] == "%":
+            return 1024
+        elif s[-2:] == "px":
+            return float(s[:-2])
+        elif s[-2:] == "pt":
+            return float(s[:-2]) * 1.25
+        elif s[-2:] == "em":
+            return float(s[:-2]) * 16
+        elif s[-2:] == "mm":
+            return float(s[:-2]) * 3.54
+        elif s[-2:] == "pc":
+            return float(s[:-2]) * 15
+        elif s[-2:] == "cm":
+            return float(s[:-2]) * 35.43
+        elif s[-2:] == "in":
+            return float(s[:-2]) * 90
+        else:
+            return 1024
+
+    def _merge_transform(self, node, transform):
+        if node.tag == inkex.addNS("svg", "svg") and node.get("viewBox"):
+            vx, vy, vw, vh = [
+                self._get_dimension(x) for x in node.get("viewBox").split()
+            ]
+            dimension_width = self._get_dimension(node.get("width", vw))
+            dimension_height = self._get_dimension(node.get("height", vh))
+            t = ("translate(%f, %f) scale(%f, %f)" %
+                 (-vx, -vy, dimension_width / vw, dimension_height / vh))
+            cur_transform = simpletransform.parseTransform(t, transform)
+            cur_transform = simpletransform.parseTransform(
+                node.get("transform"), cur_transform)
+            del node.attrib["viewBox"]
+        else:
+            cur_transform = simpletransform.parseTransform(
+                node.get("transform"), transform)
+        node.set("transform", simpletransform.formatTransform(cur_transform))
+
+    def _merge_style(self, node, style):
+        cur_style = simplestyle.parseStyle(node.get("style", ""))
+        remaining_style = {}
+
+        non_propagated = ["filter"]
+        for key in non_propagated:
+            if key in cur_style.keys():
+                remaining_style[key] = cur_style[key]
+                del cur_style[key]
+
+        parent_style_copy = style.copy()
+        parent_style_copy.update(cur_style)
+        cur_style = parent_style_copy
+        style_attribs = ["fill", "stroke"]
+        for attrib in style_attribs:
+            if node.get(attrib):
+                cur_style[attrib] = node.get(attrib)
+                del node.attrib[attrib]
+
+                if (node.tag == inkex.addNS("svg", "svg")
+                        or node.tag == inkex.addNS("g", "svg")
+                        or node.tag == inkex.addNS("a", "svg")
+                        or node.tag == inkex.addNS("switch", "svg")):
+                    if len(remaining_style) == 0:
+                        if "style" in node.keys():
+                            del node.attrib["style"]
+                    else:
+                        node.set("style",
+                                 simplestyle.formatStyle(remaining_style))
+
+                else:
+                    cur_style.update(remaining_style)
+
+                    node.set("style", simplestyle.formatStyle(cur_style))
 
 
 if __name__ == '__main__':
