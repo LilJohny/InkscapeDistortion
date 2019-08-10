@@ -6,7 +6,6 @@ import inkex
 import simplepath
 import simplestyle
 import cubicsuperpath
-import simplestyle
 import bezmisc
 
 
@@ -22,7 +21,7 @@ class DistortionExtension(inkex.Effect):
                                      action="store",
                                      type="float",
                                      dest="lambda_coef",
-                                     default=1.0,
+                                     default=-5.0,
                                      help="command line help")
 
     def distort_coordinates(self, x, y):
@@ -87,14 +86,20 @@ class DistortionExtension(inkex.Effect):
 
                         splits = nodes_number
                         for s in xrange(int(splits), 1, -1):
-                            new[-1][-1], next, sub[i] = DistortionExtension.cspbezsplitatlength(
-                                new[-1][-1], sub[i], 1.0 / s)
+                            new[-1][-1], next, sub[
+                                i] = DistortionExtension.cspbezsplitatlength(
+                                    new[-1][-1], sub[i], 1.0 / s)
                             new[-1].append(next[:])
                         new[-1].append(sub[i])
                         i += 1
                 node.set('d', cubicsuperpath.formatPath(new))
 
     def effect(self):
+        if re.match(r'g\d+',
+                    list(self.selected.iteritems())[0][0]) is not None:
+            raise SystemExit(
+                "You are trying to distort group of objects.\n This extension works only with path objects due to Inkscape API restrictions.\n Ungroup your objects and try again."
+            )
         self.split_into_nodes()
         self.q = self.options.lambda_coef
         nodes = []
