@@ -1,12 +1,16 @@
 import os
-from math import sqrt
+import math
+import copy
+import re
 import inkex
 import simplepath
-import simpletransform
 import simplestyle
+import cubicsuperpath
+import simplestyle
+import bezmisc
 
 
-class DistorsionExtension(inkex.Effect):
+class DistortionExtension(inkex.Effect):
     def __init__(self):
         inkex.Effect.__init__(self)
         try:
@@ -34,16 +38,64 @@ class DistorsionExtension(inkex.Effect):
         x_u = (x - self.x_c) / (self.width + self.height)
         y_u = (y - self.y_c) / (self.width + self.height)
         x_d = x_u / 2 / (self.q * y_u**2 + x_u**2 * self.q) * (
-            1 - sqrt(1 - 4 * self.q * y_u**2 - 4 * x_u**2 * self.q))
+            1 - math.sqrt(1 - 4 * self.q * y_u**2 - 4 * x_u**2 * self.q))
         y_d = y_u / 2 / (self.q * y_u**2 + x_u**2 * self.q) * (
-            1 - sqrt(1 - 4 * self.q * y_u**2 - 4 * x_u**2 * self.q))
+            1 - math.sqrt(1 - 4 * self.q * y_u**2 - 4 * x_u**2 * self.q))
         x_d *= self.width + self.height
         y_d *= self.width + self.height
         x_d += self.x_c
         y_d += self.y_c
         return x_d, y_d
 
+    @staticmethod
+    def cspseglength(sp1, sp2, tolerance=0.001):
+        bez = (sp1[1][:], sp1[2][:], sp2[0][:], sp2[1][:])
+        return bezmisc.bezierlength(bez, tolerance)
+
+    @staticmethod
+    def tpoint((x1, y1), (x2, y2), t=0.5):
+        return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)]
+
+    @staticmethod
+    def cspbezsplitatlength(sp1, sp2, l=0.5, tolerance=0.001):
+        bez = (sp1[1][:], sp1[2][:], sp2[0][:], sp2[1][:])
+        t = bezmisc.beziertatlength(bez, l, tolerance)
+        return DistortionExtension.cspbezsplit(sp1, sp2, t)
+
+    @staticmethod
+    def cspbezsplit(sp1, sp2, t=0.5):
+        m1 = DistortionExtension.tpoint(sp1[1], sp1[2], t)
+        m2 = DistortionExtension.tpoint(sp1[2], sp2[0], t)
+        m3 = DistortionExtension.tpoint(sp2[0], sp2[1], t)
+        m4 = DistortionExtension.tpoint(m1, m2, t)
+        m5 = DistortionExtension.tpoint(m2, m3, t)
+        m = DistortionExtension.tpoint(m4, m5, t)
+        return [[sp1[0][:], sp1[1][:], m1], [m4, m, m5],
+                [m3, sp2[1][:], sp2[2][:]]]
+
+    def split_into_nodes(self, nodes_number=1000):
+        for id, node in self.selected.iteritems():
+            if node.tag == inkex.addNS('path', 'svg'):
+                p = cubicsuperpath.parsePath(node.get('d'))
+                new = []
+                for sub in p:
+                    new.append([sub[0][:]])
+                    i = 1
+                    while i <= len(sub) - 1:
+                        length = DistortionExtension.cspseglength(
+                            new[-1][-1], sub[i])
+
+                        splits = nodes_number
+                        for s in xrange(int(splits), 1, -1):
+                            new[-1][-1], next, sub[i] = DistortionExtension.cspbezsplitatlength(
+                                new[-1][-1], sub[i], 1.0 / s)
+                            new[-1].append(next[:])
+                        new[-1].append(sub[i])
+                        i += 1
+                node.set('d', cubicsuperpath.formatPath(new))
+
     def effect(self):
+        self.split_into_nodes()
         self.q = self.options.lambda_coef
         nodes = []
         for id, node in self.selected.iteritems():
@@ -80,89 +132,7 @@ class DistorsionExtension(inkex.Effect):
                                 ['L', self.distort_coordinates(x, y)])
                 node.set('d', simplepath.formatPath(distorted))
 
-    def _get_dimension(self, s="1024"):
-        "Converts an SVG length to pixels"
-        if s == "":
-            return 0
-        try:
-            last = int(s[-1])
-        except (ValueError, IndexError):
-            last = None
-        if type(last) == int:
-            return float(s)
-        elif s[-1] == "%":
-            return 1024
-        elif s[-2:] == "px":
-            return float(s[:-2])
-        elif s[-2:] == "pt":
-            return float(s[:-2]) * 1.25
-        elif s[-2:] == "em":
-            return float(s[:-2]) * 16
-        elif s[-2:] == "mm":
-            return float(s[:-2]) * 3.54
-        elif s[-2:] == "pc":
-            return float(s[:-2]) * 15
-        elif s[-2:] == "cm":
-            return float(s[:-2]) * 35.43
-        elif s[-2:] == "in":
-            return float(s[:-2]) * 90
-        else:
-            return 1024
-
-    def _merge_transform(self, node, transform):
-        if node.tag == inkex.addNS("svg", "svg") and node.get("viewBox"):
-            vx, vy, vw, vh = [
-                self._get_dimension(x) for x in node.get("viewBox").split()
-            ]
-            dimension_width = self._get_dimension(node.get("width", vw))
-            dimension_height = self._get_dimension(node.get("height", vh))
-            t = ("translate(%f, %f) scale(%f, %f)" %
-                 (-vx, -vy, dimension_width / vw, dimension_height / vh))
-            cur_transform = simpletransform.parseTransform(t, transform)
-            cur_transform = simpletransform.parseTransform(
-                node.get("transform"), cur_transform)
-            del node.attrib["viewBox"]
-        else:
-            cur_transform = simpletransform.parseTransform(
-                node.get("transform"), transform)
-        node.set("transform", simpletransform.formatTransform(cur_transform))
-
-    def _merge_style(self, node, style):
-        cur_style = simplestyle.parseStyle(node.get("style", ""))
-        remaining_style = {}
-
-        non_propagated = ["filter"]
-        for key in non_propagated:
-            if key in cur_style.keys():
-                remaining_style[key] = cur_style[key]
-                del cur_style[key]
-
-        parent_style_copy = style.copy()
-        parent_style_copy.update(cur_style)
-        cur_style = parent_style_copy
-        style_attribs = ["fill", "stroke"]
-        for attrib in style_attribs:
-            if node.get(attrib):
-                cur_style[attrib] = node.get(attrib)
-                del node.attrib[attrib]
-
-                if (node.tag == inkex.addNS("svg", "svg")
-                        or node.tag == inkex.addNS("g", "svg")
-                        or node.tag == inkex.addNS("a", "svg")
-                        or node.tag == inkex.addNS("switch", "svg")):
-                    if len(remaining_style) == 0:
-                        if "style" in node.keys():
-                            del node.attrib["style"]
-                    else:
-                        node.set("style",
-                                 simplestyle.formatStyle(remaining_style))
-
-                else:
-                    cur_style.update(remaining_style)
-
-                    node.set("style", simplestyle.formatStyle(cur_style))
-
 
 if __name__ == '__main__':
-    ext = DistorsionExtension()
+    ext = DistortionExtension()
     ext.affect()
